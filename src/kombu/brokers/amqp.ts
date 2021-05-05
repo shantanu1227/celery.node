@@ -18,6 +18,7 @@ export default class AMQPBroker implements CeleryBroker {
   connect: Promise<amqplib.Connection>;
   channel: Promise<amqplib.Channel>;
   queue: string;
+  options: object;
 
   /**
    * AMQP broker class
@@ -30,6 +31,7 @@ export default class AMQPBroker implements CeleryBroker {
     this.queue = queue;
     this.connect = amqplib.connect(url, opts);
     this.channel = this.connect.then(conn => conn.createChannel());
+    this.options = opts;
   }
 
   /**
@@ -129,8 +131,14 @@ export default class AMQPBroker implements CeleryBroker {
           .then(() => Promise.resolve(ch))
       )
       .then(ch =>
+      {
+        if (this.options.prefetchCount) {
+          ch.prefetch(this.options.prefetchCount);
+        }
         ch.consume(queue, rawMsg => {
-          ch.ack(rawMsg);
+          if (!this.options.lateAck) {
+            ch.ack(rawMsg);            
+          }
 
           // now supports only application/json of content-type
           if (rawMsg.properties.contentType !== "application/json") {
@@ -145,9 +153,18 @@ export default class AMQPBroker implements CeleryBroker {
               `unsupported content encoding ${rawMsg.properties.contentEncoding}`
             );
           }
-
-          callback(new AMQPMessage(rawMsg));
-        })
+          if(!this.options.lateAck) {
+            callback(new AMQPMessage(rawMsg));
+          } else {
+            if (this.options.asyncCallback) {
+              callback(new AMQPMessage(rawMsg)).then(()=>ch.ack(rawMsg));
+            } else {
+              callback(new AMQPMessage(rawMsg));
+              ch.ack(rawMsg);
+            }
+          }
+        });
+      }
       );
   }
 }
